@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
 """
 main_app.py
-Swelling Post Tool - Abaqus noGUI BAT launcher version
-Python 3.11
+Swelling Post Tool - Simple GUI + Abaqus Python Runner
 
-ver.0.6
-- Abaqus noGUI script를 Output 폴더로 복사
-- cd /d "%OUT%" 후 noGUI=_abaqus_nogui_runner.py 방식으로 실행
-- Abaqus cae noGUI="full path" 이슈 회피
+Python 3.11에서 실행
+Abaqus 결과 추출은 기본적으로:
+    call "%ABQ%" python script.py odb inp output
+
+FBF처럼 CAE session이 필요한 경우만 추후:
+    call "%ABQ%" cae noGUI=script.py -- odb inp output
 """
 
 import os
+import sys
 import json
 import time
 import queue
-import shutil
 import threading
 import subprocess
 import tkinter as tk
@@ -23,18 +24,34 @@ from tkinter import ttk, filedialog, messagebox
 
 
 APP_TITLE = "Swelling Post Tool"
-APP_VERSION = "ver.0.6"
+APP_VERSION = "ver.0.7"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
 OUTPUT_DIR = os.path.join(BASE_DIR, "output")
-ODB_SCRIPT_DIR = os.path.join(BASE_DIR, "odb")
+SCRIPT_DIR = os.path.join(BASE_DIR, "scripts")
 
 PROJECT_CONFIG_PATH = os.path.join(CONFIG_DIR, "project_config.json")
 
-DEFAULT_ABQ19 = r"C:\opt\SIMULIA\Commands\abq2019.bat"
-DEFAULT_ABQ21 = r"C:\opt\SIMULIA\Commands\abq2021.bat"
-DEFAULT_NOGUI_SCRIPT = os.path.join(ODB_SCRIPT_DIR, "abaqus_smoke_test.py")
+ABQ19 = r"C:\opt\SIMULIA\Commands\abq2019.bat"
+ABQ21 = r"C:\opt\SIMULIA\Commands\abq2021.bat"
+
+# 우선 smoke test 하나만 실행
+# 이후 여기에 extract_disp.py, extract_peeq.py 등을 순서대로 추가하면 됨
+EXTRACT_TASKS = [
+    {
+        "name": "Smoke Test",
+        "script": os.path.join(SCRIPT_DIR, "abaqus_smoke_test.py"),
+        "mode": "python"
+    }
+]
+
+# 추후 FBF는 이런 식으로 추가
+# {
+#     "name": "Free Body Force",
+#     "script": os.path.join(SCRIPT_DIR, "extract_fbf.py"),
+#     "mode": "cae"
+# }
 
 
 class SwellingPostTool(tk.Tk):
@@ -42,8 +59,8 @@ class SwellingPostTool(tk.Tk):
         super().__init__()
 
         self.title("{} {}".format(APP_TITLE, APP_VERSION))
-        self.geometry("1180x780")
-        self.minsize(1080, 700)
+        self.geometry("1050x720")
+        self.minsize(980, 660)
         self.configure(bg="#f5f7fb")
 
         self.font_regular = self._get_font([
@@ -52,6 +69,7 @@ class SwellingPostTool(tk.Tk):
             "NanumSquareOTF",
             "맑은 고딕"
         ])
+
         self.font_bold = self._get_font([
             "나눔스퀘어OTF Bold",
             "나눔스퀘어 OTF Bold",
@@ -62,19 +80,15 @@ class SwellingPostTool(tk.Tk):
         self.odb_path_var = tk.StringVar()
         self.inp_path_var = tk.StringVar()
         self.output_path_var = tk.StringVar(value=OUTPUT_DIR)
-
-        self.abq19_path_var = tk.StringVar(value=DEFAULT_ABQ19)
-        self.abq21_path_var = tk.StringVar(value=DEFAULT_ABQ21)
-        self.nogui_script_var = tk.StringVar(value=DEFAULT_NOGUI_SCRIPT)
         self.abaqus_version_var = tk.StringVar(value="2019")
 
         self.status_var = tk.StringVar(value="Ready")
         self.progress_var = tk.DoubleVar(value=0)
 
-        self.log_queue = queue.Queue()
-        self.worker_thread = None
-        self.current_process = None
         self.is_running = False
+        self.current_process = None
+        self.worker_thread = None
+        self.log_queue = queue.Queue()
 
         self._prepare_folders()
         self._setup_style()
@@ -95,7 +109,7 @@ class SwellingPostTool(tk.Tk):
         return candidates[-1]
 
     def _prepare_folders(self):
-        for folder in [CONFIG_DIR, OUTPUT_DIR, ODB_SCRIPT_DIR]:
+        for folder in [CONFIG_DIR, OUTPUT_DIR, SCRIPT_DIR]:
             if not os.path.exists(folder):
                 os.makedirs(folder)
 
@@ -121,14 +135,54 @@ class SwellingPostTool(tk.Tk):
         style.configure("Card.TFrame", background=self.card)
         style.configure("TFrame", background=self.bg)
 
-        style.configure("TLabel", background=self.bg, foreground=self.text, font=(self.font_regular, 10))
-        style.configure("Card.TLabel", background=self.card, foreground=self.text, font=(self.font_regular, 10))
-        style.configure("Title.TLabel", background=self.bg, foreground=self.text, font=(self.font_bold, 24))
-        style.configure("Subtitle.TLabel", background=self.bg, foreground=self.subtext, font=(self.font_regular, 11))
-        style.configure("Section.TLabel", background=self.card, foreground=self.text, font=(self.font_bold, 15))
-        style.configure("Hint.TLabel", background=self.card, foreground=self.subtext, font=(self.font_regular, 10))
+        style.configure(
+            "TLabel",
+            background=self.bg,
+            foreground=self.text,
+            font=(self.font_regular, 10)
+        )
 
-        style.configure("TButton", font=(self.font_bold, 10), padding=(14, 8), borderwidth=0)
+        style.configure(
+            "Card.TLabel",
+            background=self.card,
+            foreground=self.text,
+            font=(self.font_regular, 10)
+        )
+
+        style.configure(
+            "Title.TLabel",
+            background=self.bg,
+            foreground=self.text,
+            font=(self.font_bold, 25)
+        )
+
+        style.configure(
+            "Subtitle.TLabel",
+            background=self.bg,
+            foreground=self.subtext,
+            font=(self.font_regular, 11)
+        )
+
+        style.configure(
+            "Section.TLabel",
+            background=self.card,
+            foreground=self.text,
+            font=(self.font_bold, 15)
+        )
+
+        style.configure(
+            "Hint.TLabel",
+            background=self.card,
+            foreground=self.subtext,
+            font=(self.font_regular, 10)
+        )
+
+        style.configure(
+            "TButton",
+            font=(self.font_bold, 10),
+            padding=(14, 8),
+            borderwidth=0
+        )
 
         style.configure(
             "Primary.TButton",
@@ -137,10 +191,16 @@ class SwellingPostTool(tk.Tk):
             background=self.blue,
             foreground="#ffffff"
         )
+
         style.map(
             "Primary.TButton",
-            background=[("active", self.blue_dark), ("disabled", "#b0c9f8")],
-            foreground=[("disabled", "#ffffff")]
+            background=[
+                ("active", self.blue_dark),
+                ("disabled", "#b0c9f8")
+            ],
+            foreground=[
+                ("disabled", "#ffffff")
+            ]
         )
 
         style.configure(
@@ -150,23 +210,24 @@ class SwellingPostTool(tk.Tk):
             background="#f2f4f6",
             foreground=self.text
         )
-        style.map("Ghost.TButton", background=[("active", "#e5e8eb")])
 
-        style.configure("TEntry", font=(self.font_regular, 10), padding=(10, 8))
-        style.configure("TCombobox", font=(self.font_regular, 10), padding=(10, 8))
-
-        style.configure("TNotebook", background=self.bg, borderwidth=0)
-        style.configure(
-            "TNotebook.Tab",
-            font=(self.font_bold, 11),
-            padding=(22, 11),
-            background=self.bg,
-            foreground=self.subtext
-        )
         style.map(
-            "TNotebook.Tab",
-            background=[("selected", self.card)],
-            foreground=[("selected", self.blue)]
+            "Ghost.TButton",
+            background=[
+                ("active", "#e5e8eb")
+            ]
+        )
+
+        style.configure(
+            "TEntry",
+            font=(self.font_regular, 10),
+            padding=(10, 8)
+        )
+
+        style.configure(
+            "TCombobox",
+            font=(self.font_regular, 10),
+            padding=(10, 8)
         )
 
         style.configure(
@@ -176,44 +237,34 @@ class SwellingPostTool(tk.Tk):
             background=self.blue
         )
 
-        style.configure(
-            "Treeview",
-            font=(self.font_regular, 10),
-            rowheight=34,
-            background=self.card,
-            fieldbackground=self.card,
-            foreground=self.text
-        )
-        style.configure(
-            "Treeview.Heading",
-            font=(self.font_bold, 10),
-            background="#f8fafc",
-            foreground=self.subtext
-        )
-
     # =========================================================
     # UI
     # =========================================================
     def _build_ui(self):
         root = ttk.Frame(self, style="Root.TFrame")
-        root.pack(fill="both", expand=True, padx=28, pady=24)
+        root.pack(fill="both", expand=True, padx=30, pady=24)
 
         self._build_header(root)
-        self._build_notebook(root)
+        self._build_main_card(root)
         self._build_log_card(root)
         self._build_status_bar(root)
 
     def _build_header(self, parent):
         header = ttk.Frame(parent, style="Root.TFrame")
-        header.pack(fill="x", pady=(0, 18))
+        header.pack(fill="x", pady=(0, 20))
 
         left = ttk.Frame(header, style="Root.TFrame")
         left.pack(side="left", fill="x", expand=True)
 
-        ttk.Label(left, text="Swelling Post Tool", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             left,
-            text="INP 기반 모델 파싱 · ODB 최소 추출 · Python 자동 후처리",
+            text="Swelling Post Tool",
+            style="Title.TLabel"
+        ).pack(anchor="w")
+
+        ttk.Label(
+            left,
+            text="ODB 결과 추출 · INP 기반 후처리 · Excel 미사용 Python 자동화",
             style="Subtitle.TLabel"
         ).pack(anchor="w", pady=(6, 0))
 
@@ -228,126 +279,81 @@ class SwellingPostTool(tk.Tk):
         )
         badge.pack(side="right", anchor="n")
 
-    def _build_notebook(self, parent):
-        self.notebook = ttk.Notebook(parent)
-        self.notebook.pack(fill="both", expand=True)
+    def _build_main_card(self, parent):
+        card = ttk.Frame(parent, style="Card.TFrame")
+        card.pack(fill="both", expand=True)
 
-        self.project_tab = ttk.Frame(self.notebook, style="Root.TFrame")
-        self.set_tab = ttk.Frame(self.notebook, style="Root.TFrame")
-        self.run_tab = ttk.Frame(self.notebook, style="Root.TFrame")
-        self.plot_tab = ttk.Frame(self.notebook, style="Root.TFrame")
+        inner = ttk.Frame(card, style="Card.TFrame")
+        inner.pack(fill="both", expand=True, padx=30, pady=28)
 
-        self.notebook.add(self.project_tab, text="Project")
-        self.notebook.add(self.set_tab, text="Set")
-        self.notebook.add(self.run_tab, text="Run")
-        self.notebook.add(self.plot_tab, text="Plot")
-
-        self._build_project_tab()
-        self._build_set_tab()
-        self._build_run_tab()
-        self._build_plot_tab()
-
-    def _card(self, parent):
-        frame = ttk.Frame(parent, style="Card.TFrame")
-        frame.pack(fill="both", expand=True, padx=2, pady=18)
-
-        inner = ttk.Frame(frame, style="Card.TFrame")
-        inner.pack(fill="both", expand=True, padx=28, pady=26)
-
-        return inner
-
-    def _build_project_tab(self):
-        card = self._card(self.project_tab)
-
-        ttk.Label(card, text="프로젝트 설정", style="Section.TLabel").pack(anchor="w")
         ttk.Label(
-            card,
-            text="ODB, INP, Output, Abaqus 실행 경로를 설정합니다.",
+            inner,
+            text="프로젝트 실행 설정",
+            style="Section.TLabel"
+        ).pack(anchor="w")
+
+        ttk.Label(
+            inner,
+            text="ODB, INP, Output 폴더만 선택하면 내부에서 Abaqus Python 스크립트를 순서대로 실행합니다.",
             style="Hint.TLabel"
-        ).pack(anchor="w", pady=(6, 22))
+        ).pack(anchor="w", pady=(6, 24))
 
-        self._add_path_row(card, "ODB File", self.odb_path_var, "선택", self._select_odb_file)
-        self._add_path_row(card, "INP File", self.inp_path_var, "선택", self._select_inp_file)
-        self._add_path_row(card, "Output Folder", self.output_path_var, "선택", self._select_output_folder)
-        self._add_path_row(card, "Abaqus 2019", self.abq19_path_var, "선택", self._select_abq19_file)
-        self._add_path_row(card, "Abaqus 2021", self.abq21_path_var, "선택", self._select_abq21_file)
-        self._add_path_row(card, "noGUI Script", self.nogui_script_var, "선택", self._select_nogui_script)
+        self._add_path_row(
+            inner,
+            "ODB File",
+            self.odb_path_var,
+            "선택",
+            self._select_odb_file
+        )
 
-        version_row = ttk.Frame(card, style="Card.TFrame")
-        version_row.pack(fill="x", pady=9)
+        self._add_path_row(
+            inner,
+            "INP File",
+            self.inp_path_var,
+            "선택",
+            self._select_inp_file
+        )
 
-        ttk.Label(version_row, text="Abaqus Version", style="Card.TLabel", width=15).pack(side="left")
+        self._add_path_row(
+            inner,
+            "Output Folder",
+            self.output_path_var,
+            "선택",
+            self._select_output_folder
+        )
 
-        combo = ttk.Combobox(
+        version_row = ttk.Frame(inner, style="Card.TFrame")
+        version_row.pack(fill="x", pady=(12, 4))
+
+        ttk.Label(
+            version_row,
+            text="Abaqus Version",
+            style="Card.TLabel",
+            width=15
+        ).pack(side="left")
+
+        version_combo = ttk.Combobox(
             version_row,
             textvariable=self.abaqus_version_var,
             values=["2019", "2021"],
             state="readonly",
-            width=15
+            width=12
         )
-        combo.pack(side="left", padx=(10, 0))
+        version_combo.pack(side="left", padx=(10, 0))
 
-        btn_frame = ttk.Frame(card, style="Card.TFrame")
-        btn_frame.pack(fill="x", pady=(22, 0))
-
-        ttk.Button(btn_frame, text="설정 저장", style="Ghost.TButton", command=self._save_project_config).pack(side="left")
-        ttk.Button(btn_frame, text="설정 불러오기", style="Ghost.TButton", command=self._load_project_config).pack(side="left", padx=(8, 0))
-        ttk.Button(btn_frame, text="경로 확인", style="Primary.TButton", command=self._check_project_paths).pack(side="right")
-
-    def _add_path_row(self, parent, label_text, variable, button_text, command):
-        row = ttk.Frame(parent, style="Card.TFrame")
-        row.pack(fill="x", pady=7)
-
-        ttk.Label(row, text=label_text, style="Card.TLabel", width=15).pack(side="left")
-
-        entry = ttk.Entry(row, textvariable=variable)
-        entry.pack(side="left", fill="x", expand=True, padx=(10, 10), ipady=3)
-
-        ttk.Button(row, text=button_text, style="Ghost.TButton", command=command, width=9).pack(side="left")
-
-    def _build_set_tab(self):
-        card = self._card(self.set_tab)
-
-        ttk.Label(card, text="Set 선택", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(
-            card,
-            text="다음 단계에서 INP 파싱 결과 기반 Set 선택 기능을 연결합니다.",
+        abq_hint = ttk.Label(
+            version_row,
+            text="기본 경로는 코드 상단 ABQ19 / ABQ21 상수에서 관리",
             style="Hint.TLabel"
-        ).pack(anchor="w", pady=(6, 22))
+        )
+        abq_hint.pack(side="left", padx=(14, 0))
 
-        columns = ("type", "name", "count")
-        self.set_tree = ttk.Treeview(card, columns=columns, show="headings", height=10)
-
-        self.set_tree.heading("type", text="Type")
-        self.set_tree.heading("name", text="Set Name")
-        self.set_tree.heading("count", text="Count")
-
-        self.set_tree.column("type", width=130, anchor="center")
-        self.set_tree.column("name", width=620, anchor="w")
-        self.set_tree.column("count", width=120, anchor="center")
-
-        self.set_tree.pack(fill="both", expand=True)
-
-        self.set_tree.insert("", "end", values=("ELSET", "CELL_BODY_ELSET", "-"))
-        self.set_tree.insert("", "end", values=("NSET", "TEMP_NSET_CELL_BODY", "-"))
-        self.set_tree.insert("", "end", values=("SURFACE", "CELL_CONTACT_SURF", "-"))
-
-    def _build_run_tab(self):
-        card = self._card(self.run_tab)
-
-        ttk.Label(card, text="실행", style="Section.TLabel").pack(anchor="w")
-        ttk.Label(
-            card,
-            text="Run 버튼을 누르면 noGUI 스크립트를 Output 폴더로 복사한 뒤 Abaqus를 실행합니다.",
-            style="Hint.TLabel"
-        ).pack(anchor="w", pady=(6, 22))
-
-        btn_frame = ttk.Frame(card, style="Card.TFrame")
-        btn_frame.pack(fill="x")
+        btn_frame = ttk.Frame(inner, style="Card.TFrame")
+        btn_frame.pack(fill="x", pady=(28, 0))
 
         self.run_button = ttk.Button(
             btn_frame,
-            text="Run Abaqus",
+            text="Run",
             style="Primary.TButton",
             command=self._on_run_clicked
         )
@@ -364,40 +370,56 @@ class SwellingPostTool(tk.Tk):
 
         ttk.Button(
             btn_frame,
-            text="Clear Log",
+            text="경로 확인",
             style="Ghost.TButton",
-            command=self._clear_log
+            command=self._check_paths
         ).pack(side="left", padx=(8, 0))
 
-        progress_box = ttk.Frame(card, style="Card.TFrame")
-        progress_box.pack(fill="x", pady=(28, 0))
+        ttk.Button(
+            btn_frame,
+            text="설정 저장",
+            style="Ghost.TButton",
+            command=self._save_project_config
+        ).pack(side="right")
 
-        ttk.Label(progress_box, text="Progress", style="Card.TLabel").pack(anchor="w")
+        progress_frame = ttk.Frame(inner, style="Card.TFrame")
+        progress_frame.pack(fill="x", pady=(28, 0))
+
+        ttk.Label(
+            progress_frame,
+            text="Progress",
+            style="Card.TLabel"
+        ).pack(anchor="w")
 
         self.progress_bar = ttk.Progressbar(
-            progress_box,
+            progress_frame,
             variable=self.progress_var,
             maximum=100,
             mode="determinate"
         )
         self.progress_bar.pack(fill="x", pady=(10, 0))
 
-    def _build_plot_tab(self):
-        card = self._card(self.plot_tab)
+    def _add_path_row(self, parent, label_text, variable, button_text, command):
+        row = ttk.Frame(parent, style="Card.TFrame")
+        row.pack(fill="x", pady=9)
 
-        ttk.Label(card, text="Plot Viewer", style="Section.TLabel").pack(anchor="w")
         ttk.Label(
-            card,
-            text="다음 단계에서 Plotly HTML 그래프와 리포트 뷰어를 연결합니다.",
-            style="Hint.TLabel"
-        ).pack(anchor="w", pady=(6, 22))
+            row,
+            text=label_text,
+            style="Card.TLabel",
+            width=15
+        ).pack(side="left")
+
+        entry = ttk.Entry(row, textvariable=variable)
+        entry.pack(side="left", fill="x", expand=True, padx=(10, 10), ipady=3)
 
         ttk.Button(
-            card,
-            text="그래프 열기",
-            style="Primary.TButton",
-            command=self._open_plot_placeholder
-        ).pack(anchor="w")
+            row,
+            text=button_text,
+            style="Ghost.TButton",
+            command=command,
+            width=9
+        ).pack(side="left")
 
     def _build_log_card(self, parent):
         log_card = ttk.Frame(parent, style="Card.TFrame")
@@ -406,11 +428,22 @@ class SwellingPostTool(tk.Tk):
         header = ttk.Frame(log_card, style="Card.TFrame")
         header.pack(fill="x", padx=20, pady=(16, 8))
 
-        ttk.Label(header, text="Log", style="Section.TLabel").pack(side="left")
+        ttk.Label(
+            header,
+            text="Log",
+            style="Section.TLabel"
+        ).pack(side="left")
+
+        ttk.Button(
+            header,
+            text="Clear",
+            style="Ghost.TButton",
+            command=self._clear_log
+        ).pack(side="right")
 
         self.log_text = tk.Text(
             log_card,
-            height=8,
+            height=10,
             wrap="word",
             font=("Consolas", 10),
             bg=self.log_bg,
@@ -422,11 +455,26 @@ class SwellingPostTool(tk.Tk):
             pady=12
         )
 
-        scrollbar = ttk.Scrollbar(log_card, orient="vertical", command=self.log_text.yview)
+        scrollbar = ttk.Scrollbar(
+            log_card,
+            orient="vertical",
+            command=self.log_text.yview
+        )
         self.log_text.configure(yscrollcommand=scrollbar.set)
 
-        self.log_text.pack(side="left", fill="both", expand=True, padx=(20, 0), pady=(0, 20))
-        scrollbar.pack(side="right", fill="y", padx=(0, 20), pady=(0, 20))
+        self.log_text.pack(
+            side="left",
+            fill="both",
+            expand=True,
+            padx=(20, 0),
+            pady=(0, 20)
+        )
+        scrollbar.pack(
+            side="right",
+            fill="y",
+            padx=(0, 20),
+            pady=(0, 20)
+        )
 
     def _build_status_bar(self, parent):
         status = ttk.Frame(parent, style="Root.TFrame")
@@ -462,34 +510,12 @@ class SwellingPostTool(tk.Tk):
             self._log("INP 선택: {}\n".format(path))
 
     def _select_output_folder(self):
-        path = filedialog.askdirectory(title="Output 폴더 선택")
+        path = filedialog.askdirectory(
+            title="Output 폴더 선택"
+        )
         if path:
             self.output_path_var.set(path)
             self._log("Output 폴더 선택: {}\n".format(path))
-
-    def _select_abq19_file(self):
-        path = filedialog.askopenfilename(
-            title="abq2019.bat 선택",
-            filetypes=[("Batch file", "*.bat"), ("All files", "*.*")]
-        )
-        if path:
-            self.abq19_path_var.set(path)
-
-    def _select_abq21_file(self):
-        path = filedialog.askopenfilename(
-            title="abq2021.bat 선택",
-            filetypes=[("Batch file", "*.bat"), ("All files", "*.*")]
-        )
-        if path:
-            self.abq21_path_var.set(path)
-
-    def _select_nogui_script(self):
-        path = filedialog.askopenfilename(
-            title="Abaqus noGUI Script 선택",
-            filetypes=[("Python file", "*.py"), ("All files", "*.*")]
-        )
-        if path:
-            self.nogui_script_var.set(path)
 
     # =========================================================
     # Config
@@ -499,9 +525,6 @@ class SwellingPostTool(tk.Tk):
             "odb_path": self.odb_path_var.get(),
             "inp_path": self.inp_path_var.get(),
             "output_path": self.output_path_var.get(),
-            "abq19_path": self.abq19_path_var.get(),
-            "abq21_path": self.abq21_path_var.get(),
-            "nogui_script": self.nogui_script_var.get(),
             "abaqus_version": self.abaqus_version_var.get()
         }
 
@@ -509,12 +532,12 @@ class SwellingPostTool(tk.Tk):
             with open(PROJECT_CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
 
-            self._log("프로젝트 설정 저장 완료: {}\n".format(PROJECT_CONFIG_PATH))
-            self.status_var.set("Project config saved")
+            self._log("설정 저장 완료: {}\n".format(PROJECT_CONFIG_PATH))
+            self.status_var.set("Config saved")
 
         except Exception as e:
             messagebox.showerror("저장 오류", str(e))
-            self._log("프로젝트 설정 저장 실패: {}\n".format(e))
+            self._log("설정 저장 실패: {}\n".format(e))
 
     def _load_project_config(self):
         if not os.path.exists(PROJECT_CONFIG_PATH):
@@ -527,69 +550,77 @@ class SwellingPostTool(tk.Tk):
             self.odb_path_var.set(data.get("odb_path", ""))
             self.inp_path_var.set(data.get("inp_path", ""))
             self.output_path_var.set(data.get("output_path", OUTPUT_DIR))
-            self.abq19_path_var.set(data.get("abq19_path", DEFAULT_ABQ19))
-            self.abq21_path_var.set(data.get("abq21_path", DEFAULT_ABQ21))
-            self.nogui_script_var.set(data.get("nogui_script", DEFAULT_NOGUI_SCRIPT))
             self.abaqus_version_var.set(data.get("abaqus_version", "2019"))
 
-            self._log("프로젝트 설정 불러오기 완료: {}\n".format(PROJECT_CONFIG_PATH))
-            self.status_var.set("Project config loaded")
+            self._log("설정 불러오기 완료: {}\n".format(PROJECT_CONFIG_PATH))
+            self.status_var.set("Config loaded")
 
         except Exception as e:
             messagebox.showerror("불러오기 오류", str(e))
-            self._log("프로젝트 설정 불러오기 실패: {}\n".format(e))
+            self._log("설정 불러오기 실패: {}\n".format(e))
 
-    def _check_project_paths(self):
-        checks = [
-            ("ODB", self.odb_path_var.get()),
-            ("INP", self.inp_path_var.get()),
-            ("Abaqus 2019", self.abq19_path_var.get()),
-            ("Abaqus 2021", self.abq21_path_var.get()),
-            ("noGUI Script", self.nogui_script_var.get())
-        ]
+    # =========================================================
+    # Validation
+    # =========================================================
+    def _get_abq_path(self):
+        if self.abaqus_version_var.get() == "2021":
+            return ABQ21
+        return ABQ19
+
+    def _check_paths(self):
+        odb_path = self.odb_path_var.get()
+        inp_path = self.inp_path_var.get()
+        output_path = self.output_path_var.get()
+        abq_path = self._get_abq_path()
 
         messages = []
 
-        for name, path in checks:
-            if path and os.path.exists(path):
-                messages.append("[OK] {}: {}".format(name, path))
-            else:
-                messages.append("[NG] {} 경로 확인 필요: {}".format(name, path))
+        if os.path.exists(odb_path):
+            messages.append("[OK] ODB: {}".format(odb_path))
+        else:
+            messages.append("[NG] ODB 없음: {}".format(odb_path))
 
-        output_path = self.output_path_var.get()
+        if os.path.exists(inp_path):
+            messages.append("[OK] INP: {}".format(inp_path))
+        else:
+            messages.append("[NG] INP 없음: {}".format(inp_path))
 
         if output_path:
             if not os.path.exists(output_path):
                 os.makedirs(output_path)
             messages.append("[OK] Output: {}".format(output_path))
         else:
-            messages.append("[NG] Output 폴더 확인 필요")
+            messages.append("[NG] Output 없음")
+
+        if os.path.exists(abq_path):
+            messages.append("[OK] Abaqus: {}".format(abq_path))
+        else:
+            messages.append("[NG] Abaqus 경로 없음: {}".format(abq_path))
+
+        for task in EXTRACT_TASKS:
+            script_path = task["script"]
+            if os.path.exists(script_path):
+                messages.append("[OK] Script({}): {}".format(task["name"], script_path))
+            else:
+                messages.append("[NG] Script({}) 없음: {}".format(task["name"], script_path))
 
         msg = "\n".join(messages)
         self._log(msg + "\n")
         messagebox.showinfo("경로 확인", msg)
 
-    # =========================================================
-    # Abaqus run
-    # =========================================================
-    def _get_selected_abq_path(self):
-        if self.abaqus_version_var.get() == "2021":
-            return self.abq21_path_var.get()
-        return self.abq19_path_var.get()
-
     def _validate_before_run(self):
-        required = [
-            ("ODB 파일", self.odb_path_var.get()),
-            ("INP 파일", self.inp_path_var.get()),
-            ("noGUI Script", self.nogui_script_var.get())
-        ]
-
-        for name, path in required:
-            if not path or not os.path.exists(path):
-                messagebox.showwarning("입력 확인", "{} 경로를 확인해주세요.".format(name))
-                return False
-
+        odb_path = self.odb_path_var.get()
+        inp_path = self.inp_path_var.get()
         output_path = self.output_path_var.get()
+        abq_path = self._get_abq_path()
+
+        if not odb_path or not os.path.exists(odb_path):
+            messagebox.showwarning("입력 확인", "ODB 파일을 선택해주세요.")
+            return False
+
+        if not inp_path or not os.path.exists(inp_path):
+            messagebox.showwarning("입력 확인", "INP 파일을 선택해주세요.")
+            return False
 
         if not output_path:
             messagebox.showwarning("입력 확인", "Output 폴더를 선택해주세요.")
@@ -598,203 +629,181 @@ class SwellingPostTool(tk.Tk):
         if not os.path.exists(output_path):
             os.makedirs(output_path)
 
-        abq_path = self._get_selected_abq_path()
-
-        if not abq_path or not os.path.exists(abq_path):
+        if not os.path.exists(abq_path):
             messagebox.showwarning(
-                "입력 확인",
-                "선택한 Abaqus 실행 파일 경로를 확인해주세요.\n\n현재 경로:\n{}".format(abq_path)
+                "Abaqus 경로 확인",
+                "Abaqus 실행 파일 경로가 없습니다.\n\n코드 상단 ABQ19 / ABQ21 값을 확인해주세요.\n\n현재 경로:\n{}".format(abq_path)
             )
             return False
 
+        for task in EXTRACT_TASKS:
+            if not os.path.exists(task["script"]):
+                messagebox.showwarning(
+                    "Script 경로 확인",
+                    "{} 스크립트가 없습니다.\n\n{}".format(task["name"], task["script"])
+                )
+                return False
+
         return True
 
-    def _create_abaqus_run_bat(self):
-        abq_path = self._get_selected_abq_path()
-        script_path = self.nogui_script_var.get()
+    # =========================================================
+    # Run
+    # =========================================================
+    def _on_run_clicked(self):
+        if self.is_running:
+            messagebox.showwarning("실행 중", "이미 실행 중입니다.")
+            return
+
+        if not self._validate_before_run():
+            return
+
+        self._save_project_config()
+
+        self.is_running = True
+        self.run_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.progress_var.set(0)
+        self.status_var.set("Running...")
+
+        self._log("=" * 80 + "\n")
+        self._log("Swelling Post Tool 실행 시작\n")
+        self._log("Abaqus Version: {}\n".format(self.abaqus_version_var.get()))
+        self._log("=" * 80 + "\n")
+
+        self.worker_thread = threading.Thread(target=self._worker_run_tasks)
+        self.worker_thread.daemon = True
+        self.worker_thread.start()
+
+    def _build_task_command(self, task):
+        abq_path = self._get_abq_path()
+        script_path = task["script"]
         odb_path = self.odb_path_var.get()
         inp_path = self.inp_path_var.get()
         output_path = self.output_path_var.get()
-    
-        run_bat_path = os.path.join(output_path, "_run_abaqus_from_gui.bat")
-        copied_script_path = os.path.join(output_path, "_abaqus_python_runner.py")
-    
-        shutil.copyfile(script_path, copied_script_path)
-    
-        bat_lines = [
-            "@echo off",
-            "echo ================================================================",
-            "echo Swelling Post Tool - Abaqus Python launcher",
-            "echo ================================================================",
-            'set "ABQ={}"'.format(abq_path),
-            'set "ODB={}"'.format(odb_path),
-            'set "INP={}"'.format(inp_path),
-            'set "OUT={}"'.format(output_path),
-            "",
-            'cd /d "%OUT%"',
-            "",
-            "echo CURRENT_DIR=%CD%",
-            "echo ABQ=%ABQ%",
-            "echo ODB=%ODB%",
-            "echo INP=%INP%",
-            "echo OUT=%OUT%",
-            "",
-            'if not exist "%ABQ%" (',
-            '    echo [ERROR] Abaqus bat file does not exist: %ABQ%',
-            "    exit /b 101",
-            ")",
-            "",
-            'if not exist "_abaqus_python_runner.py" (',
-            '    echo [ERROR] Abaqus python runner does not exist',
-            "    exit /b 102",
-            ")",
-            "",
-            'if not exist "%ODB%" (',
-            '    echo [ERROR] ODB file does not exist: %ODB%',
-            "    exit /b 103",
-            ")",
-            "",
-            'if not exist "%INP%" (',
-            '    echo [ERROR] INP file does not exist: %INP%',
-            "    exit /b 104",
-            ")",
-            "",
-            "echo.",
-            "echo [INFO] Running Abaqus Python...",
-            'call "%ABQ%" python "_abaqus_python_runner.py" "%ODB%" "%INP%" "%OUT%"',
-            "",
-            "echo.",
-            "echo [INFO] Abaqus python finished with ERRORLEVEL=%ERRORLEVEL%",
-            "exit /b %ERRORLEVEL%",
-        ]
-    
-        with open(run_bat_path, "w", encoding="mbcs") as f:
-            f.write("\r\n".join(bat_lines))
-    
-        return run_bat_path
-    
-    def _worker_run_abaqus(self):
+        mode = task.get("mode", "python")
+
+        if mode == "cae":
+            cmd = 'call "{}" cae noGUI="{}" -- "{}" "{}" "{}"'.format(
+                abq_path,
+                script_path,
+                odb_path,
+                inp_path,
+                output_path
+            )
+        else:
+            cmd = 'call "{}" python "{}" "{}" "{}" "{}"'.format(
+                abq_path,
+                script_path,
+                odb_path,
+                inp_path,
+                output_path
+            )
+
+        return cmd
+
+    def _worker_run_tasks(self):
         try:
-            output_path = self.output_path_var.get()
+            total = len(EXTRACT_TASKS)
 
-            started_file = os.path.join(output_path, "abaqus_smoke_test_started.txt")
-            result_file = os.path.join(output_path, "abaqus_smoke_test_result.txt")
-            error_file = os.path.join(output_path, "abaqus_smoke_test_error.txt")
-            run_log_file = os.path.join(output_path, "abaqus_gui_run_log.txt")
-            #copied_script_file = os.path.join(output_path, "_abaqus_nogui_runner.py")
-			copied_script_file = os.path.join(output_path, "_abaqus_python_runner.py")
-            for old_file in [started_file, result_file, error_file, run_log_file]:
-                if os.path.exists(old_file):
-                    try:
-                        os.remove(old_file)
-                    except Exception:
-                        pass
+            for idx, task in enumerate(EXTRACT_TASKS, start=1):
+                if not self.is_running:
+                    self.log_queue.put(("log", "[CANCEL] 사용자 요청으로 중단\n"))
+                    self.log_queue.put(("status", "Canceled"))
+                    self.log_queue.put(("progress", 0.0))
+                    return
 
-            run_bat_path = self._create_abaqus_run_bat()
+                task_name = task["name"]
+                cmd = self._build_task_command(task)
 
-            self.log_queue.put(("log", "[BAT FILE]\n{}\n".format(run_bat_path)))
-            self.log_queue.put(("log", "[COPIED noGUI]\n{}\n".format(copied_script_file)))
-            self.log_queue.put(("log", "[INFO] Abaqus 실행 시작...\n"))
-            self.log_queue.put(("progress", 10.0))
+                self.log_queue.put(("log", "\n[{} / {}] {}\n".format(idx, total, task_name)))
+                self.log_queue.put(("log", "[COMMAND]\n{}\n".format(cmd)))
 
-            startupinfo = None
-            creationflags = 0
+                start_progress = float(idx - 1) / float(total) * 100.0
+                self.log_queue.put(("progress", start_progress))
 
-            if os.name == "nt":
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                creationflags = subprocess.CREATE_NO_WINDOW
+                return_code = self._run_command_realtime(cmd)
 
-            self.current_process = subprocess.Popen(
-                ["cmd.exe", "/d", "/c", run_bat_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.PIPE,
-                universal_newlines=True,
-                bufsize=1,
-                cwd=output_path,
-                startupinfo=startupinfo,
-                creationflags=creationflags
-            )
+                if return_code != 0:
+                    self.log_queue.put(("log", "[FAILED] {} 실패 / return code: {}\n".format(task_name, return_code)))
+                    self.log_queue.put(("status", "Failed"))
+                    self.log_queue.put(("progress", 0.0))
+                    return
 
-            self.log_queue.put(("progress", 30.0))
+                end_progress = float(idx) / float(total) * 100.0
+                self.log_queue.put(("progress", end_progress))
+                self.log_queue.put(("log", "[OK] {} 완료\n".format(task_name)))
 
-            with open(run_log_file, "w", encoding="utf-8", errors="replace") as log_f:
-                while True:
-                    if not self.is_running:
-                        self.log_queue.put(("log", "[CANCEL] Abaqus 프로세스 종료 시도...\n"))
-                        self._terminate_current_process()
-                        self.log_queue.put(("status", "Canceled"))
-                        self.log_queue.put(("progress", 0.0))
-                        return
-
-                    line = self.current_process.stdout.readline()
-
-                    if line:
-                        log_f.write(line)
-                        log_f.flush()
-                        self.log_queue.put(("log", line))
-                    else:
-                        if self.current_process.poll() is not None:
-                            break
-                        time.sleep(0.1)
-
-            return_code = self.current_process.wait()
-            self.current_process = None
-
-            self.log_queue.put(("log", "\n[INFO] Abaqus return code: {}\n".format(return_code)))
-            self.log_queue.put(("log", "[INFO] GUI run log: {}\n".format(run_log_file)))
-
-            self._log_file_check_to_queue(
-                started_file,
-                result_file,
-                error_file,
-                run_log_file,
-                run_bat_path,
-                copied_script_file
-            )
-
-            if return_code == 0 and os.path.exists(result_file):
-                self.log_queue.put(("log", "[SUCCESS] Abaqus smoke test 완료\n"))
-                self.log_queue.put(("status", "Completed"))
-                self.log_queue.put(("progress", 100.0))
-
-            elif return_code == 0 and not os.path.exists(result_file):
-                self.log_queue.put(("log", "[WARNING] Abaqus return code는 0이지만 result 파일이 없습니다.\n"))
-                self.log_queue.put(("log", "[CHECK] noGUI script가 실제로 실행됐는지 확인 필요\n"))
-                self.log_queue.put(("status", "Completed but no result"))
-                self.log_queue.put(("progress", 70.0))
-
-            else:
-                self.log_queue.put(("log", "[FAILED] Abaqus 실행 실패\n"))
-                self.log_queue.put(("status", "Failed"))
-                self.log_queue.put(("progress", 0.0))
+            self.log_queue.put(("log", "\n[SUCCESS] 모든 작업 완료\n"))
+            self.log_queue.put(("status", "Completed"))
+            self.log_queue.put(("progress", 100.0))
 
         except Exception as e:
-            self.log_queue.put(("log", "[ERROR] Abaqus 실행 중 오류 발생: {}\n".format(e)))
+            self.log_queue.put(("log", "[ERROR] 실행 중 예외 발생: {}\n".format(e)))
             self.log_queue.put(("status", "Error"))
             self.log_queue.put(("progress", 0.0))
 
         finally:
             self.log_queue.put(("done", None))
 
-    def _log_file_check_to_queue(self, started_file, result_file, error_file, run_log_file, run_bat_path, copied_script_file):
-        self.log_queue.put(("log", "\n[OUTPUT CHECK]\n"))
+    def _run_command_realtime(self, cmd):
+        output_path = self.output_path_var.get()
+        run_log_path = os.path.join(output_path, "gui_run_log.txt")
 
-        file_list = [
-            ("launcher_bat", run_bat_path),
-            ("copied_nogui", copied_script_file),
-            ("started", started_file),
-            ("result", result_file),
-            ("error", error_file),
-            ("gui_run_log", run_log_file)
-        ]
+        startupinfo = None
+        creationflags = 0
 
-        for label, path in file_list:
-            if os.path.exists(path):
-                self.log_queue.put(("log", "  [OK] {} file: {}\n".format(label, path)))
-            else:
-                self.log_queue.put(("log", "  [NO] {} file: {}\n".format(label, path)))
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = subprocess.CREATE_NO_WINDOW
+
+        self.current_process = subprocess.Popen(
+            ["cmd.exe", "/d", "/c", cmd],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            universal_newlines=True,
+            bufsize=1,
+            cwd=BASE_DIR,
+            startupinfo=startupinfo,
+            creationflags=creationflags
+        )
+
+        with open(run_log_path, "a", encoding="utf-8", errors="replace") as log_f:
+            log_f.write("\n" + "=" * 80 + "\n")
+            log_f.write(cmd + "\n")
+            log_f.write("=" * 80 + "\n")
+
+            while True:
+                if not self.is_running:
+                    self.log_queue.put(("log", "[CANCEL] 프로세스 종료 시도...\n"))
+                    self._terminate_current_process()
+                    return -999
+
+                line = self.current_process.stdout.readline()
+
+                if line:
+                    log_f.write(line)
+                    log_f.flush()
+                    self.log_queue.put(("log", line))
+                else:
+                    if self.current_process.poll() is not None:
+                        break
+                    time.sleep(0.1)
+
+        return_code = self.current_process.wait()
+        self.current_process = None
+
+        self.log_queue.put(("log", "[RETURN CODE] {}\n".format(return_code)))
+        self.log_queue.put(("log", "[RUN LOG] {}\n".format(run_log_path)))
+
+        return return_code
+
+    def _on_cancel_clicked(self):
+        if self.is_running:
+            self.is_running = False
+            self.status_var.set("Cancel requested")
+            self._log("[CANCEL] 요청됨\n")
 
     def _terminate_current_process(self):
         try:
@@ -808,13 +817,7 @@ class SwellingPostTool(tk.Tk):
                 self.current_process = None
 
         except Exception as e:
-            self.log_queue.put(("log", "프로세스 종료 중 오류: {}\n".format(e)))
-
-    def _on_cancel_clicked(self):
-        if self.is_running:
-            self.is_running = False
-            self._log("Cancel 요청됨. 현재 Abaqus 작업 종료 대기 중...\n")
-            self.status_var.set("Cancel requested")
+            self.log_queue.put(("log", "[WARNING] 프로세스 종료 중 오류: {}\n".format(e)))
 
     def _on_worker_done(self):
         self.is_running = False
@@ -823,7 +826,10 @@ class SwellingPostTool(tk.Tk):
 
     def _on_close(self):
         if self.is_running:
-            answer = messagebox.askyesno("종료 확인", "작업이 실행 중입니다. 종료할까요?")
+            answer = messagebox.askyesno(
+                "종료 확인",
+                "작업이 실행 중입니다. 종료할까요?"
+            )
             if not answer:
                 return
 
@@ -849,13 +855,10 @@ class SwellingPostTool(tk.Tk):
 
                 if item_type == "log":
                     self._log(value)
-
                 elif item_type == "progress":
                     self.progress_var.set(value)
-
                 elif item_type == "status":
                     self.status_var.set(value)
-
                 elif item_type == "done":
                     self._on_worker_done()
 
@@ -863,16 +866,6 @@ class SwellingPostTool(tk.Tk):
             pass
 
         self.after(100, self._process_log_queue)
-
-    # =========================================================
-    # Plot placeholder
-    # =========================================================
-    def _open_plot_placeholder(self):
-        messagebox.showinfo(
-            "Plot Viewer",
-            "다음 단계에서 Plotly HTML 그래프 열기 기능을 연결합니다."
-        )
-        self._log("Plot Viewer 버튼 클릭됨\n")
 
 
 def main():
