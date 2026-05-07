@@ -1,18 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 main_app.py
-Swelling Post Tool - Simple GUI + Abaqus Python Runner
+Swelling Post Tool - Simple GUI + JSON Config Runner
 
 Python 3.11에서 실행
-Abaqus 결과 추출은 기본적으로:
-    call "%ABQ%" python script.py odb inp output
+Abaqus 실행 방식:
+    call "%ABQ%" python "script.py"
 
-FBF처럼 CAE session이 필요한 경우만 추후:
-    call "%ABQ%" cae noGUI=script.py -- odb inp output
+ODB / INP / Output 경로는 config/project_config.json에 저장
 """
 
 import os
-import sys
 import json
 import time
 import queue
@@ -24,7 +22,7 @@ from tkinter import ttk, filedialog, messagebox
 
 
 APP_TITLE = "Swelling Post Tool"
-APP_VERSION = "ver.0.7"
+APP_VERSION = "ver.0.8"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_DIR = os.path.join(BASE_DIR, "config")
@@ -36,8 +34,6 @@ PROJECT_CONFIG_PATH = os.path.join(CONFIG_DIR, "project_config.json")
 ABQ19 = r"C:\opt\SIMULIA\Commands\abq2019.bat"
 ABQ21 = r"C:\opt\SIMULIA\Commands\abq2021.bat"
 
-# 우선 smoke test 하나만 실행
-# 이후 여기에 extract_disp.py, extract_peeq.py 등을 순서대로 추가하면 됨
 EXTRACT_TASKS = [
     {
         "name": "Smoke Test",
@@ -45,13 +41,6 @@ EXTRACT_TASKS = [
         "mode": "python"
     }
 ]
-
-# 추후 FBF는 이런 식으로 추가
-# {
-#     "name": "Free Body Force",
-#     "script": os.path.join(SCRIPT_DIR, "extract_fbf.py"),
-#     "mode": "cae"
-# }
 
 
 class SwellingPostTool(tk.Tk):
@@ -98,9 +87,6 @@ class SwellingPostTool(tk.Tk):
         self.after(100, self._process_log_queue)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # =========================================================
-    # Init
-    # =========================================================
     def _get_font(self, candidates):
         families = set(tkfont.families())
         for font in candidates:
@@ -135,54 +121,14 @@ class SwellingPostTool(tk.Tk):
         style.configure("Card.TFrame", background=self.card)
         style.configure("TFrame", background=self.bg)
 
-        style.configure(
-            "TLabel",
-            background=self.bg,
-            foreground=self.text,
-            font=(self.font_regular, 10)
-        )
+        style.configure("TLabel", background=self.bg, foreground=self.text, font=(self.font_regular, 10))
+        style.configure("Card.TLabel", background=self.card, foreground=self.text, font=(self.font_regular, 10))
+        style.configure("Title.TLabel", background=self.bg, foreground=self.text, font=(self.font_bold, 25))
+        style.configure("Subtitle.TLabel", background=self.bg, foreground=self.subtext, font=(self.font_regular, 11))
+        style.configure("Section.TLabel", background=self.card, foreground=self.text, font=(self.font_bold, 15))
+        style.configure("Hint.TLabel", background=self.card, foreground=self.subtext, font=(self.font_regular, 10))
 
-        style.configure(
-            "Card.TLabel",
-            background=self.card,
-            foreground=self.text,
-            font=(self.font_regular, 10)
-        )
-
-        style.configure(
-            "Title.TLabel",
-            background=self.bg,
-            foreground=self.text,
-            font=(self.font_bold, 25)
-        )
-
-        style.configure(
-            "Subtitle.TLabel",
-            background=self.bg,
-            foreground=self.subtext,
-            font=(self.font_regular, 11)
-        )
-
-        style.configure(
-            "Section.TLabel",
-            background=self.card,
-            foreground=self.text,
-            font=(self.font_bold, 15)
-        )
-
-        style.configure(
-            "Hint.TLabel",
-            background=self.card,
-            foreground=self.subtext,
-            font=(self.font_regular, 10)
-        )
-
-        style.configure(
-            "TButton",
-            font=(self.font_bold, 10),
-            padding=(14, 8),
-            borderwidth=0
-        )
+        style.configure("TButton", font=(self.font_bold, 10), padding=(14, 8), borderwidth=0)
 
         style.configure(
             "Primary.TButton",
@@ -194,13 +140,8 @@ class SwellingPostTool(tk.Tk):
 
         style.map(
             "Primary.TButton",
-            background=[
-                ("active", self.blue_dark),
-                ("disabled", "#b0c9f8")
-            ],
-            foreground=[
-                ("disabled", "#ffffff")
-            ]
+            background=[("active", self.blue_dark), ("disabled", "#b0c9f8")],
+            foreground=[("disabled", "#ffffff")]
         )
 
         style.configure(
@@ -211,35 +152,11 @@ class SwellingPostTool(tk.Tk):
             foreground=self.text
         )
 
-        style.map(
-            "Ghost.TButton",
-            background=[
-                ("active", "#e5e8eb")
-            ]
-        )
+        style.map("Ghost.TButton", background=[("active", "#e5e8eb")])
+        style.configure("TEntry", font=(self.font_regular, 10), padding=(10, 8))
+        style.configure("TCombobox", font=(self.font_regular, 10), padding=(10, 8))
+        style.configure("Horizontal.TProgressbar", thickness=12, troughcolor="#edf0f3", background=self.blue)
 
-        style.configure(
-            "TEntry",
-            font=(self.font_regular, 10),
-            padding=(10, 8)
-        )
-
-        style.configure(
-            "TCombobox",
-            font=(self.font_regular, 10),
-            padding=(10, 8)
-        )
-
-        style.configure(
-            "Horizontal.TProgressbar",
-            thickness=12,
-            troughcolor="#edf0f3",
-            background=self.blue
-        )
-
-    # =========================================================
-    # UI
-    # =========================================================
     def _build_ui(self):
         root = ttk.Frame(self, style="Root.TFrame")
         root.pack(fill="both", expand=True, padx=30, pady=24)
@@ -256,12 +173,7 @@ class SwellingPostTool(tk.Tk):
         left = ttk.Frame(header, style="Root.TFrame")
         left.pack(side="left", fill="x", expand=True)
 
-        ttk.Label(
-            left,
-            text="Swelling Post Tool",
-            style="Title.TLabel"
-        ).pack(anchor="w")
-
+        ttk.Label(left, text="Swelling Post Tool", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             left,
             text="ODB 결과 추출 · INP 기반 후처리 · Excel 미사용 Python 자동화",
@@ -286,51 +198,21 @@ class SwellingPostTool(tk.Tk):
         inner = ttk.Frame(card, style="Card.TFrame")
         inner.pack(fill="both", expand=True, padx=30, pady=28)
 
+        ttk.Label(inner, text="프로젝트 실행 설정", style="Section.TLabel").pack(anchor="w")
         ttk.Label(
             inner,
-            text="프로젝트 실행 설정",
-            style="Section.TLabel"
-        ).pack(anchor="w")
-
-        ttk.Label(
-            inner,
-            text="ODB, INP, Output 폴더만 선택하면 내부에서 Abaqus Python 스크립트를 순서대로 실행합니다.",
+            text="ODB, INP, Output 폴더를 선택하면 설정 JSON 저장 후 Abaqus Python 스크립트를 실행합니다.",
             style="Hint.TLabel"
         ).pack(anchor="w", pady=(6, 24))
 
-        self._add_path_row(
-            inner,
-            "ODB File",
-            self.odb_path_var,
-            "선택",
-            self._select_odb_file
-        )
-
-        self._add_path_row(
-            inner,
-            "INP File",
-            self.inp_path_var,
-            "선택",
-            self._select_inp_file
-        )
-
-        self._add_path_row(
-            inner,
-            "Output Folder",
-            self.output_path_var,
-            "선택",
-            self._select_output_folder
-        )
+        self._add_path_row(inner, "ODB File", self.odb_path_var, "선택", self._select_odb_file)
+        self._add_path_row(inner, "INP File", self.inp_path_var, "선택", self._select_inp_file)
+        self._add_path_row(inner, "Output Folder", self.output_path_var, "선택", self._select_output_folder)
 
         version_row = ttk.Frame(inner, style="Card.TFrame")
         version_row.pack(fill="x", pady=(12, 4))
 
-        ttk.Label(
-            version_row,
-            text="Abaqus Version",
-            style="Card.TLabel",
-            width=15
-        ).pack(side="left")
+        ttk.Label(version_row, text="Abaqus Version", style="Card.TLabel", width=15).pack(side="left")
 
         version_combo = ttk.Combobox(
             version_row,
@@ -341,12 +223,11 @@ class SwellingPostTool(tk.Tk):
         )
         version_combo.pack(side="left", padx=(10, 0))
 
-        abq_hint = ttk.Label(
+        ttk.Label(
             version_row,
-            text="기본 경로는 코드 상단 ABQ19 / ABQ21 상수에서 관리",
+            text="ABQ 경로는 main_app.py 상단 ABQ19 / ABQ21에서 관리",
             style="Hint.TLabel"
-        )
-        abq_hint.pack(side="left", padx=(14, 0))
+        ).pack(side="left", padx=(14, 0))
 
         btn_frame = ttk.Frame(inner, style="Card.TFrame")
         btn_frame.pack(fill="x", pady=(28, 0))
@@ -385,11 +266,7 @@ class SwellingPostTool(tk.Tk):
         progress_frame = ttk.Frame(inner, style="Card.TFrame")
         progress_frame.pack(fill="x", pady=(28, 0))
 
-        ttk.Label(
-            progress_frame,
-            text="Progress",
-            style="Card.TLabel"
-        ).pack(anchor="w")
+        ttk.Label(progress_frame, text="Progress", style="Card.TLabel").pack(anchor="w")
 
         self.progress_bar = ttk.Progressbar(
             progress_frame,
@@ -403,23 +280,12 @@ class SwellingPostTool(tk.Tk):
         row = ttk.Frame(parent, style="Card.TFrame")
         row.pack(fill="x", pady=9)
 
-        ttk.Label(
-            row,
-            text=label_text,
-            style="Card.TLabel",
-            width=15
-        ).pack(side="left")
+        ttk.Label(row, text=label_text, style="Card.TLabel", width=15).pack(side="left")
 
         entry = ttk.Entry(row, textvariable=variable)
         entry.pack(side="left", fill="x", expand=True, padx=(10, 10), ipady=3)
 
-        ttk.Button(
-            row,
-            text=button_text,
-            style="Ghost.TButton",
-            command=command,
-            width=9
-        ).pack(side="left")
+        ttk.Button(row, text=button_text, style="Ghost.TButton", command=command, width=9).pack(side="left")
 
     def _build_log_card(self, parent):
         log_card = ttk.Frame(parent, style="Card.TFrame")
@@ -428,11 +294,7 @@ class SwellingPostTool(tk.Tk):
         header = ttk.Frame(log_card, style="Card.TFrame")
         header.pack(fill="x", padx=20, pady=(16, 8))
 
-        ttk.Label(
-            header,
-            text="Log",
-            style="Section.TLabel"
-        ).pack(side="left")
+        ttk.Label(header, text="Log", style="Section.TLabel").pack(side="left")
 
         ttk.Button(
             header,
@@ -455,26 +317,11 @@ class SwellingPostTool(tk.Tk):
             pady=12
         )
 
-        scrollbar = ttk.Scrollbar(
-            log_card,
-            orient="vertical",
-            command=self.log_text.yview
-        )
+        scrollbar = ttk.Scrollbar(log_card, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scrollbar.set)
 
-        self.log_text.pack(
-            side="left",
-            fill="both",
-            expand=True,
-            padx=(20, 0),
-            pady=(0, 20)
-        )
-        scrollbar.pack(
-            side="right",
-            fill="y",
-            padx=(0, 20),
-            pady=(0, 20)
-        )
+        self.log_text.pack(side="left", fill="both", expand=True, padx=(20, 0), pady=(0, 20))
+        scrollbar.pack(side="right", fill="y", padx=(0, 20), pady=(0, 20))
 
     def _build_status_bar(self, parent):
         status = ttk.Frame(parent, style="Root.TFrame")
@@ -488,9 +335,6 @@ class SwellingPostTool(tk.Tk):
             font=(self.font_regular, 10)
         ).pack(side="left")
 
-    # =========================================================
-    # File selection
-    # =========================================================
     def _select_odb_file(self):
         path = filedialog.askopenfilename(
             title="ODB 파일 선택",
@@ -510,18 +354,14 @@ class SwellingPostTool(tk.Tk):
             self._log("INP 선택: {}\n".format(path))
 
     def _select_output_folder(self):
-        path = filedialog.askdirectory(
-            title="Output 폴더 선택"
-        )
+        path = filedialog.askdirectory(title="Output 폴더 선택")
         if path:
             self.output_path_var.set(path)
             self._log("Output 폴더 선택: {}\n".format(path))
 
-    # =========================================================
-    # Config
-    # =========================================================
     def _save_project_config(self):
         data = {
+            "base_dir": BASE_DIR,
             "odb_path": self.odb_path_var.get(),
             "inp_path": self.inp_path_var.get(),
             "output_path": self.output_path_var.get(),
@@ -529,6 +369,9 @@ class SwellingPostTool(tk.Tk):
         }
 
         try:
+            if not os.path.exists(CONFIG_DIR):
+                os.makedirs(CONFIG_DIR)
+
             with open(PROJECT_CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
 
@@ -559,9 +402,6 @@ class SwellingPostTool(tk.Tk):
             messagebox.showerror("불러오기 오류", str(e))
             self._log("설정 불러오기 실패: {}\n".format(e))
 
-    # =========================================================
-    # Validation
-    # =========================================================
     def _get_abq_path(self):
         if self.abaqus_version_var.get() == "2021":
             return ABQ21
@@ -575,15 +415,8 @@ class SwellingPostTool(tk.Tk):
 
         messages = []
 
-        if os.path.exists(odb_path):
-            messages.append("[OK] ODB: {}".format(odb_path))
-        else:
-            messages.append("[NG] ODB 없음: {}".format(odb_path))
-
-        if os.path.exists(inp_path):
-            messages.append("[OK] INP: {}".format(inp_path))
-        else:
-            messages.append("[NG] INP 없음: {}".format(inp_path))
+        messages.append("[OK] ODB: {}".format(odb_path) if os.path.exists(odb_path) else "[NG] ODB 없음: {}".format(odb_path))
+        messages.append("[OK] INP: {}".format(inp_path) if os.path.exists(inp_path) else "[NG] INP 없음: {}".format(inp_path))
 
         if output_path:
             if not os.path.exists(output_path):
@@ -592,17 +425,15 @@ class SwellingPostTool(tk.Tk):
         else:
             messages.append("[NG] Output 없음")
 
-        if os.path.exists(abq_path):
-            messages.append("[OK] Abaqus: {}".format(abq_path))
-        else:
-            messages.append("[NG] Abaqus 경로 없음: {}".format(abq_path))
+        messages.append("[OK] Abaqus: {}".format(abq_path) if os.path.exists(abq_path) else "[NG] Abaqus 경로 없음: {}".format(abq_path))
 
         for task in EXTRACT_TASKS:
             script_path = task["script"]
-            if os.path.exists(script_path):
-                messages.append("[OK] Script({}): {}".format(task["name"], script_path))
-            else:
-                messages.append("[NG] Script({}) 없음: {}".format(task["name"], script_path))
+            messages.append(
+                "[OK] Script({}): {}".format(task["name"], script_path)
+                if os.path.exists(script_path)
+                else "[NG] Script({}) 없음: {}".format(task["name"], script_path)
+            )
 
         msg = "\n".join(messages)
         self._log(msg + "\n")
@@ -632,7 +463,7 @@ class SwellingPostTool(tk.Tk):
         if not os.path.exists(abq_path):
             messagebox.showwarning(
                 "Abaqus 경로 확인",
-                "Abaqus 실행 파일 경로가 없습니다.\n\n코드 상단 ABQ19 / ABQ21 값을 확인해주세요.\n\n현재 경로:\n{}".format(abq_path)
+                "Abaqus 실행 파일 경로가 없습니다.\n\nmain_app.py 상단 ABQ19 / ABQ21 값을 확인해주세요.\n\n현재 경로:\n{}".format(abq_path)
             )
             return False
 
@@ -646,9 +477,6 @@ class SwellingPostTool(tk.Tk):
 
         return True
 
-    # =========================================================
-    # Run
-    # =========================================================
     def _on_run_clicked(self):
         if self.is_running:
             messagebox.showwarning("실행 중", "이미 실행 중입니다.")
@@ -677,26 +505,17 @@ class SwellingPostTool(tk.Tk):
     def _build_task_command(self, task):
         abq_path = self._get_abq_path()
         script_path = task["script"]
-        odb_path = self.odb_path_var.get()
-        inp_path = self.inp_path_var.get()
-        output_path = self.output_path_var.get()
         mode = task.get("mode", "python")
 
         if mode == "cae":
-            cmd = 'call "{}" cae noGUI="{}" -- "{}" "{}" "{}"'.format(
+            cmd = 'set "ABQ={}" && call "%ABQ%" cae noGUI="{}"'.format(
                 abq_path,
-                script_path,
-                odb_path,
-                inp_path,
-                output_path
+                script_path
             )
         else:
-            cmd = 'call "{}" python "{}" "{}" "{}" "{}"'.format(
+            cmd = 'set "ABQ={}" && call "%ABQ%" python "{}"'.format(
                 abq_path,
-                script_path,
-                odb_path,
-                inp_path,
-                output_path
+                script_path
             )
 
         return cmd
@@ -826,10 +645,7 @@ class SwellingPostTool(tk.Tk):
 
     def _on_close(self):
         if self.is_running:
-            answer = messagebox.askyesno(
-                "종료 확인",
-                "작업이 실행 중입니다. 종료할까요?"
-            )
+            answer = messagebox.askyesno("종료 확인", "작업이 실행 중입니다. 종료할까요?")
             if not answer:
                 return
 
@@ -838,9 +654,6 @@ class SwellingPostTool(tk.Tk):
 
         self.destroy()
 
-    # =========================================================
-    # Log
-    # =========================================================
     def _log(self, message):
         self.log_text.insert("end", message)
         self.log_text.see("end")
