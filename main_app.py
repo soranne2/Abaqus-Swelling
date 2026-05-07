@@ -615,16 +615,16 @@ class SwellingPostTool(tk.Tk):
         odb_path = self.odb_path_var.get()
         inp_path = self.inp_path_var.get()
         output_path = self.output_path_var.get()
-
+    
         run_bat_path = os.path.join(output_path, "_run_abaqus_from_gui.bat")
-        copied_script_path = os.path.join(output_path, "_abaqus_nogui_runner.py")
-
+        copied_script_path = os.path.join(output_path, "_abaqus_python_runner.py")
+    
         shutil.copyfile(script_path, copied_script_path)
-
+    
         bat_lines = [
             "@echo off",
             "echo ================================================================",
-            "echo Swelling Post Tool - Abaqus noGUI launcher",
+            "echo Swelling Post Tool - Abaqus Python launcher",
             "echo ================================================================",
             'set "ABQ={}"'.format(abq_path),
             'set "ODB={}"'.format(odb_path),
@@ -644,8 +644,8 @@ class SwellingPostTool(tk.Tk):
             "    exit /b 101",
             ")",
             "",
-            'if not exist "_abaqus_nogui_runner.py" (',
-            '    echo [ERROR] noGUI runner does not exist',
+            'if not exist "_abaqus_python_runner.py" (',
+            '    echo [ERROR] Abaqus python runner does not exist',
             "    exit /b 102",
             ")",
             "",
@@ -660,44 +660,19 @@ class SwellingPostTool(tk.Tk):
             ")",
             "",
             "echo.",
-            "echo [INFO] Running Abaqus CAE noGUI...",
-            'call "%ABQ%" cae noGUI=_abaqus_nogui_runner.py -- "%ODB%" "%INP%" "%OUT%"',
+            "echo [INFO] Running Abaqus Python...",
+            'call "%ABQ%" python "_abaqus_python_runner.py" "%ODB%" "%INP%" "%OUT%"',
             "",
             "echo.",
-            "echo [INFO] Abaqus finished with ERRORLEVEL=%ERRORLEVEL%",
+            "echo [INFO] Abaqus python finished with ERRORLEVEL=%ERRORLEVEL%",
             "exit /b %ERRORLEVEL%",
         ]
-
+    
         with open(run_bat_path, "w", encoding="mbcs") as f:
             f.write("\r\n".join(bat_lines))
-
+    
         return run_bat_path
-
-    def _on_run_clicked(self):
-        if self.is_running:
-            messagebox.showwarning("실행 중", "이미 작업이 실행 중입니다.")
-            return
-
-        if not self._validate_before_run():
-            return
-
-        self._save_project_config()
-
-        self.is_running = True
-        self.run_button.configure(state="disabled")
-        self.cancel_button.configure(state="normal")
-        self.progress_var.set(0)
-        self.status_var.set("Running Abaqus...")
-
-        self._log("=" * 80 + "\n")
-        self._log("Abaqus noGUI 실행 시작\n")
-        self._log("Abaqus Version: {}\n".format(self.abaqus_version_var.get()))
-        self._log("=" * 80 + "\n")
-
-        self.worker_thread = threading.Thread(target=self._worker_run_abaqus)
-        self.worker_thread.daemon = True
-        self.worker_thread.start()
-
+    
     def _worker_run_abaqus(self):
         try:
             output_path = self.output_path_var.get()
@@ -706,8 +681,8 @@ class SwellingPostTool(tk.Tk):
             result_file = os.path.join(output_path, "abaqus_smoke_test_result.txt")
             error_file = os.path.join(output_path, "abaqus_smoke_test_error.txt")
             run_log_file = os.path.join(output_path, "abaqus_gui_run_log.txt")
-            copied_script_file = os.path.join(output_path, "_abaqus_nogui_runner.py")
-
+            #copied_script_file = os.path.join(output_path, "_abaqus_nogui_runner.py")
+			copied_script_file = os.path.join(output_path, "_abaqus_python_runner.py")
             for old_file in [started_file, result_file, error_file, run_log_file]:
                 if os.path.exists(old_file):
                     try:
